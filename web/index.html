@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Análise de Vendas na Nuvem</title>
+<style>
+  :root { --cor: #0f6cbd; --fundo: #f4f6f8; --texto: #1c2733; --borda: #d7dde3; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, Arial, sans-serif; background: var(--fundo); color: var(--texto); }
+  header { background: var(--cor); color: #fff; padding: 20px 24px; }
+  header h1 { margin: 0; font-size: 1.4rem; }
+  header p { margin: 4px 0 0; opacity: .9; font-size: .95rem; }
+  main { max-width: 960px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; }
+  section { background: #fff; border: 1px solid var(--borda); border-radius: 10px; padding: 18px; }
+  h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  button { background: var(--cor); color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: .95rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.sec { background: #fff; color: var(--cor); border: 1px solid var(--cor); }
+  .msg { margin-top: 10px; padding: 10px; border-radius: 6px; font-size: .92rem; display: none; }
+  .msg.ok { display: block; background: #e6f4ea; color: #14532d; }
+  .msg.erro { display: block; background: #fdecea; color: #7a1c14; }
+  .msg ul { margin: 6px 0 0 18px; padding: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--borda); }
+  .scroll { overflow-x: auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card { border: 1px solid var(--borda); border-radius: 8px; padding: 12px; }
+  .card small { color: #5b6b7b; display: block; }
+  .card strong { font-size: 1.3rem; }
+  .barra { display: grid; grid-template-columns: 150px 1fr 90px; gap: 8px; align-items: center; margin: 6px 0; font-size: .9rem; }
+  .barra div.fill { background: var(--cor); height: 14px; border-radius: 4px; }
+  .barra span:last-child { text-align: right; }
+  h3 { margin: 18px 0 6px; font-size: 1rem; }
+  .vazio { color: #5b6b7b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Análise de Vendas na Nuvem</h1>
+  <p>Projeto final de Cloud Computing &ndash; Azure Static Web Apps + Azure Functions + Blob Storage</p>
+</header>
+
+<main>
+  <section>
+    <h2>1. Enviar arquivo CSV de vendas</h2>
+    <p class="vazio">Colunas: data (AAAA-MM-DD), produto, categoria, quantidade, preco_unitario.</p>
+    <input type="file" id="arquivo" accept=".csv,text/csv">
+    <button id="btnEnviar">Enviar para a nuvem</button>
+    <div id="msgUpload" class="msg"></div>
+  </section>
+
+  <section>
+    <h2>2. Arquivos guardados no Blob Storage</h2>
+    <button class="sec" id="btnAtualizar">Atualizar lista</button>
+    <div class="scroll"><table>
+      <thead><tr><th>Arquivo</th><th>Registros</th><th>Tamanho</th><th>Enviado em</th><th></th></tr></thead>
+      <tbody id="listaArquivos"></tbody>
+    </table></div>
+    <div id="msgLista" class="msg"></div>
+  </section>
+
+  <section>
+    <h2>3. Relatório</h2>
+    <div id="msgRel" class="msg"></div>
+    <div id="relatorio"><p class="vazio">Escolha um arquivo na lista e clique em "Ver relatório".</p></div>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const moeda = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  // Mostra mensagem (usa textContent: nunca insere HTML vindo do usuario)
+  function mostrar(el, tipo, texto, detalhes) {
+    el.className = "msg " + tipo;
+    el.textContent = texto;
+    if (detalhes && detalhes.length) {
+      const ul = document.createElement("ul");
+      detalhes.forEach((d) => { const li = document.createElement("li"); li.textContent = d; ul.appendChild(li); });
+      el.appendChild(ul);
+    }
+  }
+  function limpar(el) { el.className = "msg"; el.textContent = ""; }
+
+  async function chamar(url, opcoes) {
+    const r = await fetch(url, opcoes);
+    let dados = null;
+    try { dados = await r.json(); } catch { /* sem corpo */ }
+    if (!r.ok) {
+      const e = new Error((dados && dados.erro) || "Erro " + r.status);
+      e.detalhes = dados && dados.detalhes;
+      throw e;
+    }
+    return dados;
+  }
+
+  // ---------- 1. Upload ----------
+  $("btnEnviar").addEventListener("click", async () => {
+    const f = $("arquivo").files[0];
+    limpar($("msgUpload"));
+    if (!f) return mostrar($("msgUpload"), "erro", "Escolha um arquivo .csv primeiro.");
+    $("btnEnviar").disabled = true;
+    try {
+      const conteudo = await f.text();
+      const r = await chamar("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: f.name, conteudo }),
+      });
+      mostrar($("msgUpload"), "ok", "Arquivo gravado no Blob Storage (" + r.registros + " registros).");
+      carregarLista();
+    } catch (e) {
+      mostrar($("msgUpload"), "erro", e.message, e.detalhes);
+    } finally {
+      $("btnEnviar").disabled = false;
+    }
+  });
+
+  // ---------- 2. Lista ----------
+  async function carregarLista() {
+    const corpo = $("listaArquivos");
+    limpar($("msgLista"));
+    try {
+      const lista = await chamar("/api/arquivos");
+      corpo.textContent = "";
+      if (!lista.length) {
+        const tr = document.createElement("tr"); const td = document.createElement("td");
+        td.colSpan = 5; td.className = "vazio"; td.textContent = "Nenhum arquivo enviado ainda.";
+        tr.appendChild(td); corpo.appendChild(tr); return;
+      }
+      lista.forEach((a) => {
+        const tr = document.createElement("tr");
+        [a.nome, a.registros ?? "-", (a.tamanho / 1024).toFixed(1) + " KB", new Date(a.data).toLocaleString("pt-BR")]
+          .forEach((t) => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
+        const td = document.createElement("td");
+        const b = document.createElement("button"); b.textContent = "Ver relatório";
+        b.addEventListener("click", () => verRelatorio(a.nome));
+        td.appendChild(b); tr.appendChild(td); corpo.appendChild(tr);
+      });
+    } catch (e) {
+      mostrar($("msgLista"), "erro", e.message);
+    }
+  }
+  $("btnAtualizar").addEventListener("click", carregarLista);
+
+  // ---------- 3. Relatorio ----------
+  function el(tag, texto, classe) {
+    const x = document.createElement(tag);
+    if (texto !== undefined) x.textContent = texto;
+    if (classe) x.className = classe;
+    return x;
+  }
+  function barras(itens, rotulo, valor, formato) {
+    const box = el("div");
+    const max = Math.max(...itens.map(valor));
+    itens.forEach((i) => {
+      const linha = el("div", undefined, "barra");
+      const fill = el("div", undefined, "fill");
+      fill.style.width = (valor(i) / max) * 100 + "%";
+      const trilho = el("div"); trilho.appendChild(fill);
+      linha.append(el("span", rotulo(i)), trilho, el("span", formato(valor(i))));
+      box.appendChild(linha);
+    });
+    return box;
+  }
+  async function verRelatorio(nome) {
+    const area = $("relatorio");
+    limpar($("msgRel"));
+    area.textContent = "Calculando na nuvem...";
+    try {
+      const r = await chamar("/api/relatorio?arquivo=" + encodeURIComponent(nome));
+      area.textContent = "";
+      const cards = el("div", undefined, "cards");
+      [["Total de vendas", moeda(r.total_vendas)], ["Itens vendidos", String(r.total_itens)],
+       ["Registros", String(r.registros)], ["Ticket médio", moeda(r.ticket_medio)]].forEach(([t, v]) => {
+        const c = el("div", undefined, "card"); c.append(el("small", t), el("strong", v)); cards.appendChild(c);
+      });
+      area.appendChild(cards);
+      area.appendChild(el("h3", "Produtos mais vendidos (por quantidade)"));
+      area.appendChild(barras(r.top_produtos, (p) => p.produto, (p) => p.quantidade, (v) => v + " un."));
+      area.appendChild(el("h3", "Vendas por categoria"));
+      area.appendChild(barras(r.por_categoria, (c) => c.categoria, (c) => c.valor, moeda));
+      area.appendChild(el("h3", "Vendas por dia"));
+      area.appendChild(barras(r.por_dia, (d) => d.data, (d) => d.valor, moeda));
+    } catch (e) {
+      area.textContent = "";
+      mostrar($("msgRel"), "erro", e.message, e.detalhes);
+    }
+  }
+
+  carregarLista();
+</script>
+</body>
+</html>
